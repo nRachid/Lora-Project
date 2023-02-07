@@ -32,18 +32,7 @@ def whitening (message, S):
     W = ''.join(str(x) for x in W)
     return W
     
-    '''
-    if r>1:
-        for i in range (0,r+1):
-            m = message[:len(S)]
-            W = W + list(a^b for a,b in zip(m,S))
-            message = message[len(S):]
-    else :
-        W = list(a^b for a,b in zip(message,S))
-    W = ''.join(str(x) for x in W)
-    return W
-
-'''
+  
 
 def dewhitening(message,S):
     message = [int(x) for x in message]
@@ -238,10 +227,12 @@ def gray2dec(num):
 
 def str_to_sym(str,SF):
     list=[]
-    for i in range(len(str)//7):
-        a=str[i:i+7]
+    for i in range(len(str)//SF):
+        a=str[i:i+SF]
         b=gray2dec(int(a,2))
         list.append(b)
+    
+    
     return list
 
 def dec2gray(num):
@@ -287,32 +278,27 @@ def LoRa_modulator(SF,stream,sign):
     for h in range(len(stream)//SF):
         symbol=str_to_sym(stream[h*SF:SF*(h+1)],SF)
         signal=signal+LoRa_Modulation(SF, symbol, sign)
-    """plt.plot(signal)
-    plt.xlabel('Sample Index')
-    plt.ylabel('Amplitude')
-    plt.show()"""
-    return signal
+    if (len(stream))%SF!=0:
+        symbol=str_to_sym(stream[(len(stream)//SF)*SF:len(stream)]+'0'*(SF-len(stream)%SF),SF)
+        signal=signal+LoRa_Modulation(SF, symbol, sign)
+    
+    return signal,len(stream)
 
-def tfc(a):
+def tfc(a,SF):
+    M=2**SF
     a = np.array(a)
     
-    b = np.array(LoRa_Modulation(7,[0],1))
+    b = np.array(LoRa_Modulation(SF,[0],1))
     correlation=circular_correlation(a, b)
-   
-    """plt.plot(correlation)
-    
-    plt.ylabel('Correlation')
-    plt.show()"""
-    lags=[i for i in range(128)]
+    lags=[i for i in range(M)]
     if lags[np.argmax(abs(correlation))]==0:
         return(0)
     
-  
-    lag=lags[128-np.argmax(abs(correlation))]
+    lag=lags[M-np.argmax(abs(correlation))]
     
     return(lag)
 
-def Demodulation(s,SF):
+def Demodulation(s,SF,longueur):
     
     M=2**SF
     a=len(s)//M
@@ -322,9 +308,10 @@ def Demodulation(s,SF):
     for i in range(0,a):
        
         h=s[i*M:(i+1)*M]
-        demodulated_sequence+=str(dec2bin(dec2gray(tfc(h)),7))
+        demodulated_sequence+=str(dec2bin(dec2gray(tfc(h,SF)),SF))
+    
         
-    return demodulated_sequence
+    return demodulated_sequence#[0:longueur]
 
 def circular_correlation(x, y):
     """
@@ -334,7 +321,6 @@ def circular_correlation(x, y):
     y_fft = np.fft.fft(y)
     xy_corr = np.fft.ifft(x_fft * np.conj(y_fft))
     return np.real(xy_corr)
-
 
 ##Channel Simulation/ Synchronization
 
@@ -368,6 +354,7 @@ def awgn(s,SNRdB):
        n = sqrt(N0/2)*(standard_normal(np.shape(ss))+1j*standard_normal(np.shape(ss)))
  
     r = ss + n # received signal
+    print(sum(abs(np.array(s))**2)/len(s),sum(abs(n)**2)/len(n))
 
     return r
 
@@ -386,10 +373,8 @@ def synchro(r, pream):
 
 
 #Chaîne de transmission
-"""preamble=LoRa_Modulation(7,[0],1)*2+LoRa_Modulation(7,[0],-1)*2
-whitening_sequence='1011'
-message='10100101010110101101001000100101'"""
-def TX(S,whitening_sequence,preamble):
+
+def TX(S,whitening_sequence,preamble,SF):
 
     #print('initial signal: '+ S)
     whitened_signal=whitening(S,whitening_sequence)
@@ -399,9 +384,9 @@ def TX(S,whitening_sequence,preamble):
     #print('coded_signal: '+ coded_signal)
     interleaved_signal=interleaving(coded_signal, 7, 4)
     #print('interleaved_signal: '+ interleaved_signal)
-    modulated_signal=preamble+LoRa_modulator(7,interleaved_signal,1)
+    modulated_signal=preamble+LoRa_modulator(SF,interleaved_signal,1)[0]
     #print('longueur du signal émis: '+ str(len(modulated_signal)))
-    return modulated_signal,j,S,whitening_sequence
+    return modulated_signal,j,S,whitening_sequence,LoRa_modulator(SF,interleaved_signal,1)[1]
 
 #Passage par le canal
 def channel(S,SNR,preamble):
@@ -412,10 +397,10 @@ def channel(S,SNR,preamble):
     return synchronized_signal
 
 #Chaîne de réception
-def RX(S,whitening_sequence,message,j):
+def RX(S,whitening_sequence,message,j,SF,longueur):
     
     
-    demodulated_signal=Demodulation(S,7)[28:len(Demodulation(S,7))+1]
+    demodulated_signal=Demodulation(S,SF,longueur)[4*SF:len(Demodulation(S,SF,longueur))+1]
     #print('signal démodulé: '+ demodulated_signal)
     deinterleaved_signal= deinterleaving(demodulated_signal,7,4)
     #print('deinterleaved signal: '+ deinterleaved_signal)
@@ -424,43 +409,62 @@ def RX(S,whitening_sequence,message,j):
     signal_post_traitement=dewhitening(decoded_signal,whitening_sequence)
     #print('signal_post_traitement: '+ signal_post_traitement)
     #print('#################BER###################\n'+ str(BER(message,signal_post_traitement))+ ' bits erronés parmis '+ str(len(message))+' \nBER est donc: '+ str(BER(message,signal_post_traitement)/len(message)))
-    return BER(message,signal_post_traitement)/len(message)
+    return(BER(message,signal_post_traitement)/len(message))
 
-def LoRa_Communication_Chain_Simulator(message,SNR,preamble,whitening_sequence):
-    modulated_signal,j,S,whitening_sequence=TX(message,whitening_sequence,preamble)
+def LoRa_Communication_Chain_Simulator(message,SNR,preamble,whitening_sequence,SF):
+    modulated_signal,j,S,whitening_sequence,longueur=TX(message,whitening_sequence,preamble,SF)
 
-    return RX(channel(modulated_signal,SNR,preamble),whitening_sequence,message,j)
+    return RX(channel(modulated_signal,SNR,preamble),whitening_sequence,message,j,SF,longueur)
 
 
-#print(LoRa_Communication_Chain_Simulator('101001010101101011010010001100101',0,LoRa_Modulation(7,[0],1)*2+LoRa_Modulation(7,[0],-1)*2,'1011'))
 
-def test(message,SNR,preamble,whitening_sequence):
-    #200 samples
+def test(message,SNR,preamble,whitening_sequence,SF):
+    #1000 samples
     observation=[]
-    for i in range(200):
-       observation.append(LoRa_Communication_Chain_Simulator(message,SNR,preamble,whitening_sequence))
+    for i in range(1000):
+        observation.append(LoRa_Communication_Chain_Simulator(message,SNR,preamble,whitening_sequence,SF))
     return statistics.mean(observation)
 
-def BER_SNR_fig(message,preamble,whitening_sequence):
-    #SNR changes from -28 to 0
+def rand_key(p):
+	key1 = ""
+	for i in range(p):
+		temp = str(random.randint(0, 1))
+		key1 += temp
+		
+	return(key1) 
+
+def BER_SNR_fig(message,preamble,whitening_sequence,SF):
+    #SNR changes from -28 to 4
     y=[]
     x=[]
-    for x_SNR in range(-28,1):
-        y.append(test(message,x_SNR,preamble,whitening_sequence))
+    for x_SNR in range(-28,5):
+        y.append(test(message,x_SNR,preamble,whitening_sequence,SF))
         x.append(x_SNR)
-        print(x_SNR)
-    plt.plot(x,y)
-    plt.xlabel('SNR')
-    plt.ylabel('BER')
-    plt.show()
-    return 0
-
-
-BER_SNR_fig('1001010001010010101001011111001',LoRa_Modulation(7,[0],1)*2+LoRa_Modulation(7,[0],-1)*2,'1011')
-    
+ 
+    return x,y
 
 
 
 
 
 
+
+
+
+
+
+x_7,y_7=BER_SNR_fig('10010100101010010100101110101',LoRa_Modulation(7,[0],1)*2+LoRa_Modulation(7,[0],-1)*2,'1011',7)
+x_8,y_8=BER_SNR_fig('10010100101010010100101110101',LoRa_Modulation(8,[0],1)*2+LoRa_Modulation(8,[0],-1)*2,'1011',8)
+x_9,y_9=BER_SNR_fig('10010100101010010100101110101',LoRa_Modulation(9,[0],1)*2+LoRa_Modulation(9,[0],-1)*2,'1011',9)
+x_10,y_10=BER_SNR_fig('10010100101010010100101110101',LoRa_Modulation(10,[0],1)*2+LoRa_Modulation(10,[0],-1)*2,'1011',10)                                   
+
+plt.plot(x_7,y_7,label="SF=7")
+plt.plot(x_8, y_8, label="SF=8")
+plt.plot(x_9, y_9, label="SF=9")
+plt.plot(x_10, y_10, label="SF=10")
+plt.xlabel('SNR(dB)')
+plt.ylabel('BER')
+plt.semilogy()
+plt.legend()
+plt.grid(True)
+plt.show()
